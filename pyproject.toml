@@ -1,5 +1,5 @@
 [project]
-name = "tgtok"
+name = "tikdog"
 version = "0.1.0"
 description = "TikTok Watchdog"
 readme = "README.md"
@@ -32,4 +32,4 @@ venvPath = "."
 venv = ".venv"
 
 [project.scripts]
-tgtok = "tgtok.watchdog:main"
+tgtok = "tikdog.watchdog:main"

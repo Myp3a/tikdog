@@ -4,10 +4,10 @@ import os
 
 from dotenv import load_dotenv
 
-from tgtok.storage import Storage
-from tgtok.structures import DownloadTask
-from tgtok.telegram import Telegram
-from tgtok.tiktok import TikTok
+from tikdog.storage import Storage
+from tikdog.structures import DownloadTask
+from tikdog.telegram import Telegram
+from tikdog.tiktok import TikTok
 
 logging.basicConfig(format="{asctime} | {levelname:<8} | {name} | {message}", style="{", level=logging.INFO)
 

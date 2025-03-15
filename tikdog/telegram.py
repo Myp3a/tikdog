@@ -6,8 +6,8 @@ from typing import Any, AsyncGenerator
 from telethon import TelegramClient
 from telethon.tl.custom.message import Message
 
-from tgtok.storage import Storage
-from tgtok.structures import ParsedTelegramPost, CombinedPost
+from tikdog.storage import Storage
+from tikdog.structures import ParsedTelegramPost, CombinedPost
 
 
 class Telegram:

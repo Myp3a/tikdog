@@ -1,6 +1,6 @@
 from typing import Iterator
 
-from tgtok.structures import ParsedTikTokPost, ParsedTelegramPost, CombinedPost
+from tikdog.structures import ParsedTikTokPost, ParsedTelegramPost, CombinedPost
 
 
 class Storage:

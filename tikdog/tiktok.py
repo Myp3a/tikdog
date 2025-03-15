@@ -8,8 +8,8 @@ from f2.log.logger import LogManager  # noqa: E402
 from f2.apps.tiktok.utils import SecUserIdFetcher, ClientConfManager  # noqa: E402
 from f2.i18n.translator import TranslationManager  # noqa: E402
 
-from tgtok.storage import Storage  # noqa: E402
-from tgtok.structures import DownloadTask, ParsedTikTokPost  # noqa: E402
+from tikdog.storage import Storage  # noqa: E402
+from tikdog.structures import DownloadTask, ParsedTikTokPost  # noqa: E402
 
 LogManager().setup_logging(logging.WARNING, log_to_console=False, log_path=None)
 
