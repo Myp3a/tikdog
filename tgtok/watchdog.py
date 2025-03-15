@@ -57,17 +57,22 @@ async def dog() -> None:
     # them to Telegram. As corresponding objects will be updated, no need to
     # update Telegram data.
     while True:
-        for post in storage.unposted()[::-1]:
-            # Should be reversed, as it's stored in new -> old order, to prevent
-            # breaking the "as in TikTok" order
-            dt = DownloadTask(id_=post.tiktok_id, type_=post.tiktok_type, download_urls=post.download_urls)
-            await tt.fetch_items([dt])
-            await tg.post(post)
-            tt.delete_items([dt])
+        try:
+            for post in storage.unposted()[::-1]:
+                # Should be reversed, as it's stored in new -> old order, to prevent
+                # breaking the "as in TikTok" order
+                dt = DownloadTask(id_=post.tiktok_id, type_=post.tiktok_type, download_urls=post.download_urls)
+                await tt.fetch_items([dt])
+                await tg.post(post)
+                tt.delete_items([dt])
 
-        log.info(f"Done, sleeping for {SLEEP_TIME_SECS}")
-        await asyncio.sleep(SLEEP_TIME_SECS)
-        await tt.update_data()
+            log.info(f"Done, sleeping for {SLEEP_TIME_SECS}")
+
+            await asyncio.sleep(SLEEP_TIME_SECS)
+            await tt.update_data()
+        except Exception as e:
+            log.warning("failed to do main loop. sleeping, will retry", exc_info=e)
+            await asyncio.sleep(SLEEP_TIME_SECS)
 
 
 def main() -> None:
