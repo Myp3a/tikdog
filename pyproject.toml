@@ -1,0 +1,35 @@
+[project]
+name = "tgtok"
+version = "0.1.0"
+description = "TikTok Watchdog"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "f2>=0.0.1.7",
+    "python-dotenv>=1.0.1",
+    "telethon>=1.39.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.6,<0.7"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.1.0",
+    "pyright>=1.1.396",
+    "ruff>=0.11.0",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
+[project.scripts]
+tgtok = "tgtok.watchdog:main"
