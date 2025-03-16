@@ -2,7 +2,9 @@
 *Woof!*  
 A small watchdog that monitors your TikTok likes and saves and forwards them to your Telegram channel.
 
-<img src="res/fisch.png" height=500> <video src="res/fisch.mp4" height=500>
+Telegram Post | [Original Video](https://www.tiktok.com/@uSeRnAmE/video/7455398333754952967)
+---|---
+<img src="res/fisch.png"> | <video src="https://github.com/user-attachments/assets/941d3b42-8756-4df2-b71d-41ea9c9ec9c2">
 
 [Essential tricks](#essential-tricks) • [Adopt](#adopt) • [TODO](#todo) • [Technical notes](#technical-notes)
 # Essential tricks
