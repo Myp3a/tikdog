@@ -47,17 +47,29 @@ class Telegram:
         if not max_count:
             max_count = 4242133769  # Just a random big number that would be bigger than any channel post count
         channel = await self.bot.get_entity(self.channel_id)
-        failed_count = 0
         cntr = 0
-        while failed_count < self.allowed_empty_posts and cntr < max_count:
-            offset = -cntr if reverse else cntr
-            msg: Message | None = await self.bot.get_messages(channel, ids=start_id + offset)  # type: ignore
-            if msg:
-                yield msg
-                failed_count = 0
-            else:
-                failed_count += 1
-            cntr += 1
+        # Reverse can be reliable - going from latest post to the 0.
+        # Forward pass can't do that.
+        if reverse:
+            # but we still account for user-set limits
+            stop_at = max(0, start_id - max_count)
+            for msg_id in range(start_id, stop_at, -1):
+                msg: Message | None = await self.bot.get_messages(channel, ids=msg_id)  # type: ignore
+                if msg:
+                    yield msg
+            return
+        else:
+            failed_count = 0
+            while failed_count < self.allowed_empty_posts and cntr < max_count:
+                offset = -cntr if reverse else cntr
+                msg: Message | None = await self.bot.get_messages(channel, ids=start_id + offset)  # type: ignore
+                if msg:
+                    yield msg
+                    failed_count = 0
+                else:
+                    failed_count += 1
+                cntr += 1
+            return
 
     def parse_message_text(self, msg: str | None) -> dict[str, Any]:
         if not msg:
