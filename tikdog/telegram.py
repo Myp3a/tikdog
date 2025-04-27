@@ -90,7 +90,7 @@ class Telegram:
         return data
 
     def parse_message(self, msg: Message) -> ParsedTelegramPost:
-        text_data = self.parse_message_text(msg.raw_text)
+        text_data = self.parse_message_text(msg.text)
         if not text_data:
             # Assume follow-up picture post, as there could be multiple
             post = ParsedTelegramPost(
