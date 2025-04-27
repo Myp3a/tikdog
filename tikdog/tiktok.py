@@ -28,7 +28,7 @@ class TikTok:
             {
                 "headers": {},
                 "cookie": browser_cookie,
-                "timeout": 5,
+                "timeout": 10,
             }
         )
         self.uid = ""
