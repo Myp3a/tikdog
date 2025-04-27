@@ -83,9 +83,11 @@ class Telegram:
             # Should never be changed. TikTok ID serves as "primary key", and URL derives from it.
             # Other fields could be empty (if format changes), messages will be updated accordingly
             return {}
-        if data["liked"] is None:
+        data["id"] = int(data["id"][0])
+        data["url"] = data["url"][0]
+        if not data["liked"]:
             data["liked"] = False
-        if data["favorited"] is None:
+        if not data["favorited"]:
             data["favorited"] = False
         return data
 
