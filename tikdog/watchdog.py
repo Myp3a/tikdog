@@ -22,7 +22,7 @@ tg_app_hash = os.environ.get("TG_APP_HASH")
 tg_bot_token = os.environ.get("TG_BOT_TOKEN")
 tg_channel_id = os.environ.get("TG_CHANNEL_ID")
 
-log = logging.getLogger("tgtok.dog")
+log = logging.getLogger("tikdog.dog")
 
 SLEEP_TIME_SECS = 1800
 
@@ -44,6 +44,9 @@ async def dog() -> None:
     tg = Telegram(int(tg_app_id), tg_app_hash, tg_bot_token, int(tg_channel_id), storage)
     await tt.connect()
     await tg.connect()
+
+    if not await tt.check_video_download():
+        return
 
     # First - fetch full TikTok data. It is used as a base for combined storage.
     # This can take a while.

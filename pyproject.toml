@@ -32,4 +32,4 @@ venvPath = "."
 venv = ".venv"
 
 [project.scripts]
-tgtok = "tikdog.watchdog:main"
+tikdog = "tikdog.watchdog:main"

@@ -16,7 +16,7 @@ LogManager().setup_logging(logging.WARNING, log_to_console=False, log_path=None)
 
 class TikTok:
     def __init__(self, username: str, browser_cookie: str, device_id: str, storage: Storage):
-        self.log = logging.getLogger("tgtok.tiktok")
+        self.log = logging.getLogger("tikdog.tiktok")
         self.storage = storage
         self.username = username
         TranslationManager.get_instance().set_language("en_US")
@@ -26,7 +26,11 @@ class TikTok:
         rich_console.quiet = True
         self.tt = TiktokHandler(
             {
-                "headers": {},
+                "headers": {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0",
+                    "referer": "https://www.tiktok.com/",
+                    "origin": "https://www.tiktok.com",
+                },
                 "cookie": browser_cookie,
                 "timeout": 10,
             }
@@ -38,6 +42,26 @@ class TikTok:
     async def connect(self):
         self.uid = await SecUserIdFetcher.get_secuid(f"https://www.tiktok.com/@{self.username}")
         self.log.info(f"Connected to TikTok account {self.username}")
+
+    async def check_video_download(self) -> bool:
+        FISCH_ID = "7455398333754952967"
+        try:
+            os.remove("tmp/tmp.mp4")
+        except FileNotFoundError:
+            pass
+        self.log.info("Trying to download test video to check device ID correctness")
+        vid = (await self.tt.fetch_one_video(FISCH_ID))._to_dict()
+        await self.tt.downloader.initiate_download("video", vid["video_playAddr"], "tmp", "tmp", ".mp4")
+        await self.tt.downloader.download_tasks[-1]
+        # no way to get download result directly
+        if os.path.exists("tmp/tmp.mp4"):
+            self.log.info("Download success, device data is fine!")
+            success = True
+            os.remove("tmp/tmp.mp4")
+        else:
+            self.log.error("Can't download test video. Probably, your device ID is invalid.")
+            success = False
+        return success
 
     async def fetch_items(self, items: list[DownloadTask]) -> None:
         data_dir = "tmp"

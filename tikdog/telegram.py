@@ -18,7 +18,7 @@ class Telegram:
 
     def __init__(self, app_id: int, app_hash: str, bot_token: str, channel_id: int, storage: Storage):
         self.storage = storage
-        self.log = logging.getLogger("tgtok.telegram")
+        self.log = logging.getLogger("tikdog.telegram")
         self.bot_token = bot_token
         self.channel_id = channel_id
         self.bot = TelegramClient("bot", app_id, app_hash)
