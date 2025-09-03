@@ -96,14 +96,12 @@ class TikTok:
                 if new_item["type_"] == "photo":
                     new_item["download_urls"] = [u["imageURL"]["urlList"] for u in item["imagePost"]["images"]]
                 if new_item["type_"] == "video":
-                    if "bitrateInfo" in item["video"]:
-                        new_item["download_urls"] = [item["video"]["bitrateInfo"][0]["PlayAddr"]["UrlList"][0]]
-                    else:
-                        new_item["download_urls"] = [item["video"]["playAddr"]]
+                    new_item["download_urls"] = [item["video"]["playAddr"]]
                 post = ParsedTikTokPost(**new_item)
                 items.append(post)
             except:
-                self.log.debug(item)
+                self.log.error("Failed to parse TikTok post. Raw data below, bailing out.")
+                self.log.error(item)
                 raise
         return items
 
