@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from typing import Any, AsyncGenerator
@@ -87,6 +88,7 @@ class TikTok:
     async def parse_items(self, block_items: list[dict[str, Any]]) -> list[ParsedTikTokPost]:
         items = []
         for item in block_items:
+            item = await self.retry_if_missing_data(item)
             try:
                 new_item = {
                     "id_": int(item["id"]),
@@ -101,9 +103,27 @@ class TikTok:
                 items.append(post)
             except:
                 self.log.error("Failed to parse TikTok post. Raw data below, bailing out.")
-                self.log.error(item)
+                self.log.error(json.dumps(item))
                 raise
         return items
+
+    async def retry_if_missing_data(self, raw_post: dict[str, Any]) -> dict[str, Any]:
+        def has_data(post: dict[str, Any]) -> bool:
+            has_video = post.get("video", {}).get("playAddr", None)
+            has_photo = post.get("imagePost", {}).get("images", None)
+            return has_video or has_photo
+
+        for check_num in range(5):
+            if has_data(raw_post):
+                return raw_post
+            self.log.warning(f"Post {raw_post['id']} missing data, fetching again: try #{check_num + 1}")
+            raw_post = (await self.tt.fetch_one_video(raw_post["id"]))._to_raw()["itemInfo"]["itemStruct"]
+        if has_data(raw_post):
+            return raw_post
+        self.log.error(f"Failed to fetch data for post {raw_post['id']}")
+        self.log.error("Last try data:")
+        self.log.error(raw_post)
+        raise RuntimeError("Failed to fetch post data after retrying")
 
     async def fetch_liked(self) -> AsyncGenerator[dict[str, Any], None]:
         # From newest to oldest
