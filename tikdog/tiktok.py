@@ -111,16 +111,19 @@ class TikTok:
                         )
                         for num, u in enumerate(item["imagePost"]["images"])
                     ]
-                    new_item["media"].append(
-                        DownloadTask(
-                            post_id=new_item["id_"],
-                            type_="music",
-                            number=len(new_item["media"]),
-                            download_url=item["music"]["playUrl"],
-                            media_name=item["music"]["title"],
-                            media_cover_url=item["music"]["coverLarge"],
+                    if "playUrl" in item["music"]:
+                        new_item["media"].append(
+                            DownloadTask(
+                                post_id=new_item["id_"],
+                                type_="music",
+                                number=len(new_item["media"]),
+                                download_url=item["music"]["playUrl"],
+                                media_name=item["music"]["title"],
+                                media_cover_url=item["music"]["coverLarge"],
+                            )
                         )
-                    )
+                    else:
+                        self.log.warning(f"Post {new_item['id_']}: music is unavailable")
                 if new_item["type_"] == "video":
                     new_item["media"] = [
                         DownloadTask(
