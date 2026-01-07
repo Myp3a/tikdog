@@ -30,7 +30,7 @@ class Storage:
                 tiktok_id=p.id_,
                 tiktok_url=p.web_url,
                 tiktok_type=p.type_,
-                download_urls=p.download_urls,
+                media=p.media,
                 liked=p.liked,
                 favorited=p.favorited,
             )

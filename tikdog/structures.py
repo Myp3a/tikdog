@@ -4,24 +4,23 @@ from typing import Literal
 
 @dataclass
 class DownloadTask:
-    id_: int
-    type_: Literal["photo", "video"]
-    download_urls: list[str]
+    post_id: int
+    type_: Literal["photo", "video", "music"]
+    number: int
+    download_url: str
+    media_name: str | None = None
+    media_cover_url: str | None = None
 
     @property
-    def basename(self) -> str:
-        return f"{self.id_}_{self.type_}"
-
-    @property
-    def ext(self) -> str:
-        return "mp4" if self.type_ == "video" else "jpg"
-
-    @property
-    def named_urls(self) -> list[dict[str, str]]:
-        urls = []
-        for ind, url in enumerate(self.download_urls):
-            urls.append({"name": f"{self.id_}_{self.type_}_{ind}.{self.ext}", "url": url})
-        return urls
+    def filename(self) -> str:
+        match self.type_:
+            case "photo":
+                ext = "jpg"
+            case "video":
+                ext = "mp4"
+            case "music":
+                ext = "m4a"
+        return f"{self.post_id}_{self.number}_{self.type_}.{ext}"
 
 
 @dataclass
@@ -29,7 +28,7 @@ class ParsedTikTokPost:
     id_: int
     type_: Literal["photo", "video"]
     web_url: str
-    download_urls: list[str]
+    media: list[DownloadTask]
     liked: bool = False
     favorited: bool = False
 
@@ -50,7 +49,7 @@ class CombinedPost:
     tiktok_id: int
     tiktok_url: str
     tiktok_type: Literal["photo", "video"]
-    download_urls: list[str]
+    media: list[DownloadTask]
     liked: bool = False
     favorited: bool = False
     description: str = ""

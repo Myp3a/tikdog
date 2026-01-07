@@ -5,7 +5,6 @@ import os
 from dotenv import load_dotenv
 
 from tikdog.storage import Storage
-from tikdog.structures import DownloadTask
 from tikdog.telegram import Telegram
 from tikdog.tiktok import TikTok
 
@@ -64,10 +63,9 @@ async def dog() -> None:
             for post in storage.unposted()[::-1]:
                 # Should be reversed, as it's stored in new -> old order, to prevent
                 # breaking the "as in TikTok" order
-                dt = DownloadTask(id_=post.tiktok_id, type_=post.tiktok_type, download_urls=post.download_urls)
-                await tt.fetch_items([dt])
+                await tt.fetch_items(post.media)
                 await tg.post(post)
-                tt.delete_items([dt])
+                tt.delete_items(post.media)
 
             log.info(f"Done, sleeping for {SLEEP_TIME_SECS}")
 

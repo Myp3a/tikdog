@@ -8,6 +8,8 @@ log = logging.getLogger("f2").addHandler(logging.NullHandler())
 from f2.log.logger import LogManager  # noqa: E402
 from f2.apps.tiktok.utils import SecUserIdFetcher, ClientConfManager  # noqa: E402
 from f2.i18n.translator import TranslationManager  # noqa: E402
+import httpx  # noqa: E402
+from mutagen.mp4 import MP4, MP4Cover  # noqa: E402
 
 from tikdog.storage import Storage  # noqa: E402
 from tikdog.structures import DownloadTask, ParsedTikTokPost  # noqa: E402
@@ -67,23 +69,30 @@ class TikTok:
     async def fetch_items(self, items: list[DownloadTask]) -> None:
         data_dir = "tmp"
         for item in items:
-            self.log.debug(f"downloading {item.type_} {item.id_}")
-            for url in item.named_urls:
-                if not os.path.exists(f"{data_dir}/{url['name']}"):
-                    await self.tt.downloader.initiate_download(
-                        item.type_, url["url"], data_dir, url["name"].split(".")[0], f".{item.ext}"
-                    )
-                    await self.tt.downloader.download_tasks[-1]
+            self.log.debug(f"downloading {item.type_} {item.filename}")
+            if not os.path.exists(f"{data_dir}/{item.filename}"):
+                await self.tt.downloader.initiate_download(
+                    item.type_,
+                    item.download_url,
+                    data_dir,
+                    item.filename.split(".")[0],
+                    f".{item.filename.split('.')[1]}",
+                )
+                await self.tt.downloader.download_tasks[-1]
+            if item.type_ == "music":
+                music_file = MP4(f"{data_dir}/{item.filename}")
+                assert music_file.tags
+                music_file.tags["\xa9nam"] = item.media_name
+                assert isinstance(item.media_cover_url, str)
+                cover = httpx.get(item.media_cover_url).content
+                music_file.tags["covr"] = [MP4Cover(data=cover)]
+                music_file.save()
 
     def delete_items(self, items: list[DownloadTask]) -> None:
-        # While it's enough to pass just the ID, it should be common that
-        # deletion will be used along the download. So, it will accept the same
-        # task object. Should be easy to make it different, though
         data_dir = "tmp"
         for item in items:
-            for url in item.named_urls:
-                if os.path.exists(f"{data_dir}/{url['name']}"):
-                    os.remove(f"{data_dir}/{url['name']}")
+            if os.path.exists(f"{data_dir}/{item.filename}"):
+                os.remove(f"{data_dir}/{item.filename}")
 
     async def parse_items(self, block_items: list[dict[str, Any]]) -> list[ParsedTikTokPost]:
         items = []
@@ -96,9 +105,28 @@ class TikTok:
                 }
                 new_item["web_url"] = f"https://www.tiktok.com/@uSeRnAmE/{new_item['type_']}/{new_item['id_']}"
                 if new_item["type_"] == "photo":
-                    new_item["download_urls"] = [u["imageURL"]["urlList"] for u in item["imagePost"]["images"]]
+                    new_item["media"] = [
+                        DownloadTask(
+                            post_id=new_item["id_"], type_="photo", number=num, download_url=u["imageURL"]["urlList"]
+                        )
+                        for num, u in enumerate(item["imagePost"]["images"])
+                    ]
+                    new_item["media"].append(
+                        DownloadTask(
+                            post_id=new_item["id_"],
+                            type_="music",
+                            number=len(new_item["media"]),
+                            download_url=item["music"]["playUrl"],
+                            media_name=item["music"]["title"],
+                            media_cover_url=item["music"]["coverLarge"],
+                        )
+                    )
                 if new_item["type_"] == "video":
-                    new_item["download_urls"] = [item["video"]["playAddr"]]
+                    new_item["media"] = [
+                        DownloadTask(
+                            post_id=new_item["id_"], type_="video", number=0, download_url=item["video"]["playAddr"]
+                        )
+                    ]
                 post = ParsedTikTokPost(**new_item)
                 items.append(post)
             except:
