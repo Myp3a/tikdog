@@ -169,7 +169,7 @@ class Telegram:
         )
         filenames_sorted = []
         filenames = [f"{data_dir}/{f}" for f in os.listdir(data_dir) if f.startswith(f"{item.tiktok_id}_")]
-        filenames_sorted = sorted(filenames, key=lambda s: int(s.split(".")[0].split("_")[2]))
+        filenames_sorted = sorted(filenames, key=lambda s: int(s.split(".")[0].split("_")[1]))
         msgs = await self.bot.send_file(channel, filenames_sorted, caption=text)  # type: ignore
         sent_w_caption = self.parse_message(msgs[0])
         item._raw_tg = sent_w_caption
