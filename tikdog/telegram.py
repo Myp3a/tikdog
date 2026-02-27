@@ -148,6 +148,8 @@ class Telegram:
                 break
             self.posts[post.id_] = post
             cntr += 1
+            if cntr % 20 == 0:
+                self.log.debug(f"fetched {cntr} telegram posts")
 
         self.log.info(f"Fetched {cntr} new posts")
 
