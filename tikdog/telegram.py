@@ -168,10 +168,17 @@ class Telegram:
             f"{self.TEMPLATE_FAVORITED[0]}{item.favorited}{self.TEMPLATE_FAVORITED[1]}"
         )
         filenames_sorted = []
-        filenames = [f"{data_dir}/{f}" for f in os.listdir(data_dir) if f.startswith(f"{item.tiktok_id}_")]
+        filenames = [
+            f"{data_dir}/{f}" for f in os.listdir(data_dir) if f.startswith(f"{item.tiktok_id}_") and "music" not in f
+        ]
         filenames_sorted = sorted(filenames, key=lambda s: int(s.split(".")[0].split("_")[1]))
         msgs = await self.bot.send_file(channel, filenames_sorted, caption=text)  # type: ignore
         sent_w_caption = self.parse_message(msgs[0])
         item._raw_tg = sent_w_caption
         item.telegram_id = sent_w_caption.id_
+        music_files = [
+            f"{data_dir}/{f}" for f in os.listdir(data_dir) if f.startswith(f"{item.tiktok_id}_") and "music" in f
+        ]
+        if music_files:
+            await self.bot.send_file(channel, music_files)  # type: ignore
         return item

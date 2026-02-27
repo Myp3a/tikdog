@@ -63,9 +63,10 @@ async def dog() -> None:
             for post in storage.unposted()[::-1]:
                 # Should be reversed, as it's stored in new -> old order, to prevent
                 # breaking the "as in TikTok" order
-                await tt.fetch_items(post.media)
+                assert post._raw_tt
+                await tt.fetch_items(post._raw_tt)
                 await tg.post(post)
-                tt.delete_items(post.media)
+                tt.delete_items(post._raw_tt)
 
             log.info(f"Done, sleeping for {SLEEP_TIME_SECS}")
 

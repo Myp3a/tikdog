@@ -10,6 +10,7 @@ class DownloadTask:
     download_url: str
     media_name: str | None = None
     media_cover_url: str | None = None
+    media_format: Literal["mp3", "m4a"] | None = None
 
     @property
     def filename(self) -> str:
@@ -19,7 +20,7 @@ class DownloadTask:
             case "video":
                 ext = "mp4"
             case "music":
-                ext = "m4a"
+                ext = self.media_format
         return f"{self.post_id}_{self.number}_{self.type_}.{ext}"
 
 

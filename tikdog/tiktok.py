@@ -1,20 +1,20 @@
+import asyncio
+import base64
+import hashlib
 import json
 import logging
 import os
-from typing import Any, AsyncGenerator
+import re
+from typing import Any, AsyncGenerator, Literal
+from urllib.parse import urlencode
 
-log = logging.getLogger("f2").addHandler(logging.NullHandler())
+import httpx
+from mutagen.id3._frames import APIC, TIT2
+from mutagen.mp3 import MP3
+from mutagen.mp4 import MP4, MP4Cover
 
-from f2.log.logger import LogManager  # noqa: E402
-from f2.apps.tiktok.utils import SecUserIdFetcher, ClientConfManager  # noqa: E402
-from f2.i18n.translator import TranslationManager  # noqa: E402
-import httpx  # noqa: E402
-from mutagen.mp4 import MP4, MP4Cover  # noqa: E402
-
-from tikdog.storage import Storage  # noqa: E402
-from tikdog.structures import DownloadTask, ParsedTikTokPost  # noqa: E402
-
-LogManager().setup_logging(logging.WARNING, log_to_console=False, log_path=None)
+from tikdog.storage import Storage
+from tikdog.structures import DownloadTask, ParsedTikTokPost
 
 
 class TikTok:
@@ -22,82 +22,195 @@ class TikTok:
         self.log = logging.getLogger("tikdog.tiktok")
         self.storage = storage
         self.username = username
-        TranslationManager.get_instance().set_language("en_US")
-        ClientConfManager.tiktok_conf["BaseRequestModel"]["device"]["id"] = device_id
-        from f2.apps.tiktok.handler import TiktokHandler, rich_console
-
-        rich_console.quiet = True
-        self.tt = TiktokHandler(
-            {
-                "headers": {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0",
-                    "referer": "https://www.tiktok.com/",
-                    "origin": "https://www.tiktok.com",
-                },
-                "cookie": browser_cookie,
-                "timeout": 10,
-            }
-        )
-        self.uid = ""
+        self.browser_params = {
+            "aid": "1988",
+            "app_language": "en",
+            "app_name": "tiktok_web",
+            "browser_language": "en-US",
+            "browser_name": "Mozilla",
+            "browser_online": "true",
+            "browser_platform": "Win32",
+            "browser_version": "5.0 (Windows)",
+            "channel": "tiktok_web",
+            "device_id": device_id,
+            "device_platform": "web_pc",
+            "os": "windows",
+            "priority_region": "",
+            "region": "US",
+            "screen_height": "1440",
+            "screen_width": "2560",
+            "webcast_language": "en",
+        }
+        self.browser_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/136.0.0.0 Safari/537.36"
+            ),
+            "Cookie": browser_cookie,
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "sec-ch-ua": '"Chromium";v="136", "Google Chrome";v="136"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "Referer": "https://www.tiktok.com/",
+        }
+        self.sec_uid = ""
         self.fetch_block_size = 25
         self.posts: dict[int, ParsedTikTokPost] = {}
+        self.request_delay_sec = 5
 
-    async def connect(self):
-        self.uid = await SecUserIdFetcher.get_secuid(f"https://www.tiktok.com/@{self.username}")
+    async def request(self, method: Literal["GET", "POST"], url: str) -> httpx.Response:
+        async with httpx.AsyncClient(follow_redirects=True) as cli:
+            resp = await cli.request(method, url, headers=self.browser_headers)
+            if (
+                resp.status_code == 200
+                and "text/html" in resp.headers.get("Content-Type", "")
+                and "SlardarWAF" in resp.text
+                and 'id="cs"' in resp.text
+            ):  # WAF
+                m_wci = re.search(r'<p id="wci" class="([^"]*)"', resp.text)
+                m_cs = re.search(r'<p id="cs" class="([^"]*)"', resp.text)
+                if not m_wci or not m_cs:
+                    raise RuntimeError("WAF challenge HTML is missing wci/cs fields")
+                cookie_name = m_wci.group(1)
+                cs_b64 = m_cs.group(1)
+
+                m_rci = re.search(r'<p id="rci" class="([^"]*)"', resp.text)
+                m_rs = re.search(r'<p id="rs" class="([^"]*)"', resp.text)
+                rci = m_rci.group(1) if m_rci else ""
+                rs = m_rs.group(1) if m_rs else ""
+
+                def _b64d(s: str) -> bytes:
+                    return base64.b64decode(s + "=" * (-len(s) % 4))
+
+                c = json.loads(_b64d(cs_b64))
+                prefix = _b64d(c["v"]["a"])
+                expected = _b64d(c["v"]["c"]).hex()
+
+                self.log.info(f"  solving WAF challenge (cookie={cookie_name})...")
+                solution = None
+                for i in range(1_000_001):
+                    h = hashlib.sha256(prefix + str(i).encode()).hexdigest()
+                    if h == expected:
+                        solution = i
+                        break
+
+                if solution is None:
+                    raise RuntimeError("WAF challenge: no solution found in 0..1_000_000")
+
+                c["d"] = base64.b64encode(str(solution).encode()).decode()
+                cookie_value = base64.b64encode(json.dumps(c, separators=(",", ":")).encode()).decode()
+                waf_cookie = f"{cookie_name}={cookie_value}"
+                if rci and rs:
+                    waf_cookie += f"; {rci}={rs}"
+
+                existing_cookies = self.browser_headers.get("Cookie", "")
+                retry_cookies = f"{existing_cookies}; {waf_cookie}" if existing_cookies else waf_cookie
+                retry_headers = {**self.browser_headers, "Cookie": retry_cookies}
+
+                resp2 = await cli.request(method, url, headers=retry_headers)
+                return resp2
+            else:
+                return resp
+
+    async def connect(self) -> None:
+        user_resp = await self.request("GET", f"https://www.tiktok.com/@{self.username}")
+        user_resp.raise_for_status()
+        m = re.search(r'"secUid":"([^"]+)"', user_resp.text)
+        if not m:
+            raise RuntimeError("Couldn't fetch secUid for user!")
+        self.sec_uid = m.group(1)
         self.log.info(f"Connected to TikTok account {self.username}")
 
-    async def check_video_download(self) -> bool:
-        FISCH_ID = "7455398333754952967"
-        try:
-            os.remove("tmp/tmp.mp4")
-        except FileNotFoundError:
-            pass
-        self.log.info("Trying to download test video to check device ID correctness")
-        vid = (await self.tt.fetch_one_video(FISCH_ID))._to_dict()
-        await self.tt.downloader.initiate_download("video", vid["video_playAddr"], "tmp", "tmp", ".mp4")
-        await self.tt.downloader.download_tasks[-1]
-        # no way to get download result directly
-        if os.path.exists("tmp/tmp.mp4"):
-            self.log.info("Download success, device data is fine!")
-            success = True
-            os.remove("tmp/tmp.mp4")
-        else:
-            self.log.error("Can't download test video. Probably, your device ID is invalid.")
-            success = False
-        return success
+    async def fetch_post_metadata(self, video_id: int) -> ParsedTikTokPost:
+        post_resp = await self.request("GET", f"https://www.tiktok.com/@user/video/{video_id}")
+        post_resp.raise_for_status()
+        post_html = post_resp.text
+        m = re.search(r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.+?)</script>', post_html)
+        if not m:
+            raise RuntimeError("Could not parse video metadata")
+        data = (
+            json.loads(m.group(1))
+            .get("__DEFAULT_SCOPE__", {})
+            .get("webapp.video-detail", {})
+            .get("itemInfo", {})
+            .get("itemStruct", {})
+        )
+        if not data:
+            raise RuntimeError("Could not parse video metadata")
+        post = await self.parse_items([data])
+        return post[0]
 
-    async def fetch_items(self, items: list[DownloadTask]) -> None:
+    async def check_video_download(self) -> bool:
+        FISCH_ID = 7455398333754952967
+        self.log.info("Trying to download test video to check device ID correctness")
+        vid = await self.fetch_post_metadata(FISCH_ID)
+        try:
+            await self.fetch_items(vid)
+            self.log.info("Test video download fine")
+            return True
+        except RuntimeError:
+            self.log.error("Can't download test video. Probably, your device ID is invalid.")
+            return False
+
+    async def fetch_items(self, post: ParsedTikTokPost) -> None:
+        def validate(resp: httpx.Response) -> bool:
+            if resp.status_code != 200:
+                return False
+            if resp.headers.get("Content-Type", "") == "text/html":
+                return False
+            if len(resp.content) < 512:
+                return False
+            return True
+
+        web_post = await self.fetch_post_metadata(post.id_)
         data_dir = "tmp"
-        for item in items:
+        for item in web_post.media:
             self.log.debug(f"downloading {item.type_} {item.filename}")
             if not os.path.exists(f"{data_dir}/{item.filename}"):
-                await self.tt.downloader.initiate_download(
-                    item.type_,
-                    item.download_url,
-                    data_dir,
-                    item.filename.split(".")[0],
-                    f".{item.filename.split('.')[1]}",
-                )
-                await self.tt.downloader.download_tasks[-1]
+                if isinstance(item.download_url, str):
+                    download_url = item.download_url
+                elif isinstance(item.download_url, list):
+                    download_url = item.download_url[0]
+                else:
+                    self.log.error(f"Raw post data: {web_post}")
+                    raise RuntimeError(f"Unsupported download url type: {type(item.download_url)}")
+                resp = await self.request("GET", download_url)
+                if not validate(resp):
+                    raise RuntimeError(f"Failed to download {item.type_} {item.post_id}")
+                with open(f"{data_dir}/{item.filename}", "wb") as outf:
+                    outf.write(resp.content)
             if item.type_ == "music":
-                music_file = MP4(f"{data_dir}/{item.filename}")
-                assert music_file.tags
-                music_file.tags["\xa9nam"] = item.media_name
-                assert isinstance(item.media_cover_url, str)
-                cover = httpx.get(item.media_cover_url).content
-                music_file.tags["covr"] = [MP4Cover(data=cover)]
-                music_file.save()
+                if item.filename.endswith(".m4a"):
+                    music_file = MP4(f"{data_dir}/{item.filename}")
+                    assert music_file.tags
+                    music_file.tags["\xa9nam"] = item.media_name
+                    assert isinstance(item.media_cover_url, str)
+                    cover = httpx.get(item.media_cover_url).content
+                    music_file.tags["covr"] = [MP4Cover(data=cover)]
+                    music_file.save()
+                else:
+                    music_file = MP3(f"{data_dir}/{item.filename}")
+                    assert music_file.tags
+                    music_file.tags["TIT2"] = TIT2(encoding=3, text=item.media_name)
+                    assert isinstance(item.media_cover_url, str)
+                    cover = httpx.get(item.media_cover_url).content
+                    music_file.tags["APIC"] = APIC(encoding=3, mime="image/jpg", type=3, data=cover)
+                    music_file.save()
 
-    def delete_items(self, items: list[DownloadTask]) -> None:
+    def delete_items(self, post: ParsedTikTokPost) -> None:
         data_dir = "tmp"
-        for item in items:
+        for item in post.media:
             if os.path.exists(f"{data_dir}/{item.filename}"):
                 os.remove(f"{data_dir}/{item.filename}")
 
     async def parse_items(self, block_items: list[dict[str, Any]]) -> list[ParsedTikTokPost]:
         items = []
         for item in block_items:
-            item = await self.retry_if_missing_data(item)
             try:
                 new_item = {
                     "id_": int(item["id"]),
@@ -120,6 +233,7 @@ class TikTok:
                                 download_url=item["music"]["playUrl"],
                                 media_name=item["music"]["title"],
                                 media_cover_url=item["music"]["coverLarge"],
+                                media_format="mp3" if "audio_mpeg" in item["music"]["playUrl"] else "m4a",
                             )
                         )
                     else:
@@ -138,49 +252,41 @@ class TikTok:
                 raise
         return items
 
-    async def retry_if_missing_data(self, raw_post: dict[str, Any]) -> dict[str, Any]:
-        def has_data(post: dict[str, Any]) -> bool:
-            has_video = post.get("video", {}).get("playAddr", None)
-            has_photo = post.get("imagePost", {}).get("images", None)
-            return has_video or has_photo
-
-        for check_num in range(5):
-            if has_data(raw_post):
-                return raw_post
-            self.log.warning(f"Post {raw_post['id']} missing data, fetching again: try #{check_num + 1}")
-            raw_post = (await self.tt.fetch_one_video(raw_post["id"]))._to_raw()["itemInfo"]["itemStruct"]
-        if has_data(raw_post):
-            return raw_post
-        self.log.error(f"Failed to fetch data for post {raw_post['id']}")
-        self.log.error("Last try data:")
-        self.log.error(raw_post)
-        raise RuntimeError("Failed to fetch post data after retrying")
-
-    async def fetch_liked(self) -> AsyncGenerator[dict[str, Any], None]:
+    async def fetch_liked(self) -> AsyncGenerator[list[dict[str, Any]], None]:
         # From newest to oldest
         cntr = 0
-        async for block in self.tt.fetch_user_like_videos(self.uid, 0, self.fetch_block_size, 0):
-            block_raw = block._to_raw()
-            fetched = len(block_raw["itemList"])
-            cntr += fetched
-            has_more = block_raw["hasMore"]
-            self.log.debug(f"fetched {fetched} liked posts ({cntr} total), is there more - {has_more}")
-            yield block_raw
-            if not has_more:
-                break
+        cur = 0
+        has_more = True
+        while has_more:
+            params = {**self.browser_params, "secUid": self.sec_uid, "count": 20, "cursor": cur}
+            resp = await self.request("GET", f"https://www.tiktok.com/api/favorite/item_list/?{urlencode(params)}")
+            resp.raise_for_status()
+            data = resp.json()
+            cur = data["cursor"]
+            has_more = data["hasMore"]
+            cntr += len(data["itemList"])
+            self.log.debug(f"fetched {len(data['itemList'])} liked posts ({cntr} total), is there more - {has_more}")
+            yield data["itemList"]
+            await asyncio.sleep(5)
 
-    async def fetch_favorite(self) -> AsyncGenerator[dict[str, Any], None]:
+    async def fetch_favorite(self) -> AsyncGenerator[list[dict[str, Any]], None]:
         # From newest to oldest
         cntr = 0
-        async for block in self.tt.fetch_user_collect_videos(self.uid, 0, self.fetch_block_size, 0):
-            block_raw = block._to_raw()
-            fetched = len(block_raw["itemList"])
-            cntr += fetched
-            has_more = block_raw["hasMore"]
-            self.log.debug(f"fetched {fetched} saved posts ({cntr} total), is there more - {has_more}")
-            yield block_raw
-            if not has_more:
-                break
+        cur = 0
+        has_more = True
+        while has_more:
+            params = {**self.browser_params, "secUid": self.sec_uid, "count": 20, "cursor": cur}
+            resp = await self.request("GET", f"https://www.tiktok.com/api/user/collect/item_list/?{urlencode(params)}")
+            resp.raise_for_status()
+            data = resp.json()
+            cur = data["cursor"]
+            has_more = data["hasMore"]
+            cntr += len(data["itemList"])
+            self.log.debug(
+                f"fetched {len(data['itemList'])} favorited posts ({cntr} total), is there more - {has_more}"
+            )
+            yield data["itemList"]
+            await asyncio.sleep(5)
 
     async def update_data(self) -> None:
         # Return the latest saved post from correct dictionary, creating it if necessary
@@ -200,8 +306,8 @@ class TikTok:
         new_posts: dict[int, ParsedTikTokPost] = {}
         # Probably, all favorited items are liked, so to keep proper order we start with liked ones
         should_stop = False
-        async for block_raw in self.fetch_liked():
-            parsed_items = await self.parse_items(block_raw["itemList"])
+        async for block in self.fetch_liked():
+            parsed_items = await self.parse_items(block)
             for item in parsed_items:
                 saved = get_init_if_needs(item)
                 if saved.liked:
@@ -216,8 +322,8 @@ class TikTok:
                 break
         # However, in case there are a few that are not, we still account for them
         should_stop = False
-        async for block_raw in self.fetch_favorite():
-            parsed_items = await self.parse_items(block_raw["itemList"])
+        async for block in self.fetch_favorite():
+            parsed_items = await self.parse_items(block)
             for item in parsed_items:
                 saved = get_init_if_needs(item)
                 if saved.favorited:
