@@ -46,6 +46,7 @@ async def dog() -> None:
 
     if not await tt.check_video_download():
         return
+    await tt.check_copyrighted_video_download()
 
     # First - fetch full TikTok data. It is used as a base for combined storage.
     # This can take a while.

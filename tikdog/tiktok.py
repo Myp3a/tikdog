@@ -63,9 +63,14 @@ class TikTok:
         self.posts: dict[int, ParsedTikTokPost] = {}
         self.request_delay_sec = 5
 
-    async def request(self, method: Literal["GET", "POST"], url: str) -> httpx.Response:
+    async def request(
+        self, method: Literal["GET", "POST"], url: str, headers: dict[str, str] | None = None
+    ) -> httpx.Response:
+        if headers is None:
+            headers = {}
         async with httpx.AsyncClient(follow_redirects=True) as cli:
-            resp = await cli.request(method, url, headers=self.browser_headers)
+            req_headers = {**self.browser_headers, **headers}
+            resp = await cli.request(method, url, headers=req_headers)
             if (
                 resp.status_code == 200
                 and "text/html" in resp.headers.get("Content-Type", "")
@@ -108,9 +113,9 @@ class TikTok:
                 if rci and rs:
                     waf_cookie += f"; {rci}={rs}"
 
-                existing_cookies = self.browser_headers.get("Cookie", "")
+                existing_cookies = req_headers.get("Cookie", "")
                 retry_cookies = f"{existing_cookies}; {waf_cookie}" if existing_cookies else waf_cookie
-                retry_headers = {**self.browser_headers, "Cookie": retry_cookies}
+                retry_headers = {**req_headers, "Cookie": retry_cookies}
 
                 resp2 = await cli.request(method, url, headers=retry_headers)
                 return resp2
@@ -145,6 +150,21 @@ class TikTok:
         post = await self.parse_items([data])
         return post[0]
 
+    async def fetch_post_metadata_mobile(self, video_id: int) -> ParsedTikTokPost:
+        # TODO: might need to rotate mobile URLs
+        post_resp = await self.request(
+            "GET",
+            f"https://api22-normal-c-useast2a.tiktokv.com/aweme/v1/feed/?aweme_id={video_id}",
+            headers={"X-Argus": "why."},
+        )
+        try:
+            post_resp.raise_for_status()
+        except Exception as e:
+            raise RuntimeError("Mobile API response != 200") from e
+        js = post_resp.json()
+        post = await self.parse_items_mobile([js["aweme_list"][0]])
+        return post[0]
+
     async def check_video_download(self) -> bool:
         FISCH_ID = 7455398333754952967
         self.log.info("Trying to download test video to check device ID correctness")
@@ -157,6 +177,20 @@ class TikTok:
             self.log.error("Can't download test video. Probably, your device ID is invalid.")
             return False
 
+    async def check_copyrighted_video_download(self) -> bool:
+        KITTY_ID = 7651360277778255111
+        self.log.info("Trying to download test copyrighted video to check mobile path download")
+        try:
+            vid = await self.fetch_post_metadata_mobile(KITTY_ID)
+            await self.fetch_items(vid)
+            self.log.info("Test copyrighted video download fine")
+            return True
+        except RuntimeError:
+            self.log.warning(
+                "Can't download copyrighted video. This could lead to missing videos (pretty rare).", exc_info=True
+            )
+            return False
+
     async def fetch_items(self, post: ParsedTikTokPost) -> None:
         def validate(resp: httpx.Response) -> bool:
             if resp.status_code != 200:
@@ -167,7 +201,10 @@ class TikTok:
                 return False
             return True
 
-        web_post = await self.fetch_post_metadata(post.id_)
+        if post.should_not_refetch_via_web:
+            web_post = post
+        else:
+            web_post = await self.fetch_post_metadata(post.id_)
         data_dir = "tmp"
         for item in web_post.media:
             self.log.debug(f"downloading {item.type_} {item.filename}")
@@ -239,15 +276,46 @@ class TikTok:
                     else:
                         self.log.warning(f"Post {new_item['id_']}: music is unavailable")
                 if new_item["type_"] == "video":
+                    download_url = item["video"].get("playAddr")
+                    if not download_url:
+                        # copyrighted audio, retry fetch via mobile path
+                        self.log.warning(f"Video {new_item['id_']}: no download URL, retrying via mobile")
+                        mobile_item = await self.fetch_post_metadata_mobile(new_item["id_"])
+                        items.append(mobile_item)
+                        continue
                     new_item["media"] = [
-                        DownloadTask(
-                            post_id=new_item["id_"], type_="video", number=0, download_url=item["video"]["playAddr"]
-                        )
+                        DownloadTask(post_id=new_item["id_"], type_="video", number=0, download_url=download_url)
                     ]
                 post = ParsedTikTokPost(**new_item)
                 items.append(post)
             except:
                 self.log.error("Failed to parse TikTok post. Raw data below, bailing out.")
+                self.log.error(json.dumps(item))
+                raise
+        return items
+
+    async def parse_items_mobile(self, block_items: list[dict[str, Any]]) -> list[ParsedTikTokPost]:
+        # TODO: does copyrighted image posts exist? will update parsing once such post is found
+        items = []
+        for item in block_items:
+            try:
+                new_item = {
+                    "id_": int(item["aweme_id"]),
+                    "type_": "video",
+                }
+                new_item["web_url"] = f"https://www.tiktok.com/@uSeRnAmE/{new_item['type_']}/{new_item['id_']}"
+                new_item["media"] = [
+                    DownloadTask(
+                        post_id=new_item["id_"],
+                        type_="video",
+                        number=0,
+                        download_url=item["video"]["play_addr"]["url_list"][0],
+                    )
+                ]
+                post = ParsedTikTokPost(**new_item, should_not_refetch_via_web=True)
+                items.append(post)
+            except:
+                self.log.error("Failed to parse mobile TikTok post. Raw data below, bailing out.")
                 self.log.error(json.dumps(item))
                 raise
         return items
