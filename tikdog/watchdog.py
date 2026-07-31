@@ -13,7 +13,10 @@ logging.basicConfig(format="{asctime} | {levelname:<8} | {name} | {message}", st
 load_dotenv()
 
 tt_cookie = os.environ.get("TT_COOKIE")
+tt_mobile_url = os.environ.get("TT_MOBILE_URL")
+tt_sid_tt = os.environ.get("TT_SID_TT")
 tt_device_id = os.environ.get("TT_DEVICE_ID")
+tt_install_id = os.environ.get("TT_INSTALL_ID")
 tt_username = os.environ.get("TT_USERNAME")
 
 tg_app_id = os.environ.get("TG_APP_ID")
@@ -30,7 +33,10 @@ async def dog() -> None:
     # Yeah, type checker. Get it.
     if (
         not tt_cookie
+        or not tt_mobile_url
+        or not tt_sid_tt
         or not tt_device_id
+        or not tt_install_id
         or not tt_username
         or not tg_app_id
         or not tg_app_hash
@@ -39,7 +45,7 @@ async def dog() -> None:
     ):
         raise RuntimeError("Not all required parameters are set!")
     storage = Storage()
-    tt = TikTok(tt_username, tt_cookie, tt_device_id, storage)
+    tt = TikTok(tt_username, tt_cookie, tt_device_id, tt_install_id, tt_mobile_url, tt_sid_tt, storage)
     tg = Telegram(int(tg_app_id), tg_app_hash, tg_bot_token, int(tg_channel_id), storage)
     await tt.connect()
     await tg.connect()
@@ -67,7 +73,7 @@ async def dog() -> None:
                 # Should be reversed, as it's stored in new -> old order, to prevent
                 # breaking the "as in TikTok" order
                 assert post._raw_tt
-                await tt.fetch_items(post._raw_tt)
+                await tt.download_post(post._raw_tt)
                 await tg.post(post)
                 tt.delete_items(post._raw_tt)
 

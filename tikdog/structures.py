@@ -32,7 +32,6 @@ class ParsedTikTokPost:
     media: list[DownloadTask]
     liked: bool = False
     favorited: bool = False
-    should_not_refetch_via_web: bool = False
 
 
 @dataclass
