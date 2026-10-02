@@ -73,14 +73,39 @@ async def dog() -> None:
                 # Should be reversed, as it's stored in new -> old order, to prevent
                 # breaking the "as in TikTok" order
                 assert post._raw_tt
-                await tt.download_post(post._raw_tt)
-                await tg.post(post)
-                tt.delete_items(post._raw_tt)
+                downloaded = await tt.download_post(post._raw_tt)
+                if downloaded:
+                    await tg.post(post)
+                    tt.delete_items(post._raw_tt)
 
             log.info(f"Done, sleeping for {SLEEP_TIME_SECS}")
         except Exception as e:
             log.warning("failed to do main loop. sleeping, will retry", exc_info=e)
         await asyncio.sleep(SLEEP_TIME_SECS)
+
+
+async def check() -> None:
+    # Fetch last 100 liked/favorites and check that they are downloaded
+    if not tt_cookie or not tt_mobile_url or not tt_sid_tt or not tt_device_id or not tt_install_id or not tt_username:
+        raise RuntimeError("Not all required parameters are set!")
+    storage = Storage()
+    tt = TikTok(tt_username, tt_cookie, tt_device_id, tt_install_id, tt_mobile_url, tt_sid_tt, storage)
+    await tt.connect()
+
+    if not await tt.check_video_download():
+        return
+    await tt.check_copyrighted_video_download()
+
+    await tt.update_data(100)
+    for post in storage.unposted()[::-1]:
+        assert post._raw_tt
+        downloaded = await tt.download_post(post._raw_tt)
+        if downloaded:
+            tt.delete_items(post._raw_tt)
+
+
+def run_check() -> None:
+    asyncio.run(check())
 
 
 def main() -> None:

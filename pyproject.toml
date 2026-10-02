@@ -34,3 +34,4 @@ venv = ".venv"
 
 [project.scripts]
 tikdog = "tikdog.watchdog:main"
+check_last = "tikdog.watchdog:run_check"

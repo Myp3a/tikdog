@@ -401,7 +401,7 @@ class TikTok:
             raise
         return post
 
-    async def fetch_liked_web(self) -> AsyncGenerator[list[dict[str, Any]], None]:
+    async def fetch_liked_web(self, limit: int = 0) -> AsyncGenerator[list[dict[str, Any]], None]:
         # From newest to oldest
         cntr = 0
         cur = 0
@@ -416,9 +416,11 @@ class TikTok:
             cntr += len(data["itemList"])
             self.log.debug(f"fetched {len(data['itemList'])} liked posts ({cntr} total), is there more - {has_more}")
             yield data["itemList"]
+            if limit > 0 and cntr >= limit:
+                break
             await asyncio.sleep(self.request_delay_sec)
 
-    async def fetch_favorite_web(self) -> AsyncGenerator[list[dict[str, Any]], None]:
+    async def fetch_favorite_web(self, limit: int = 0) -> AsyncGenerator[list[dict[str, Any]], None]:
         # From newest to oldest
         cntr = 0
         cur = 0
@@ -437,9 +439,11 @@ class TikTok:
                 f"fetched {len(data['itemList'])} favorited posts ({cntr} total), is there more - {has_more}"
             )
             yield data["itemList"]
+            if limit > 0 and cntr >= limit:
+                break
             await asyncio.sleep(self.request_delay_sec)
 
-    async def update_data(self) -> None:
+    async def update_data(self, limit: int = 0) -> None:
         # Return the latest saved post from correct dictionary, creating it if necessary
         def get_init_if_needs(item: ParsedTikTokPost) -> ParsedTikTokPost:
             if item.id_ not in self.posts and item.id_ not in new_posts:
@@ -457,7 +461,7 @@ class TikTok:
         new_posts: dict[int, ParsedTikTokPost] = {}
         # Probably, all favorited items are liked, so to keep proper order we start with liked ones
         should_stop = False
-        async for block in self.fetch_liked_web():
+        async for block in self.fetch_liked_web(limit):
             for raw_post in block:
                 item = await self.parse_item_web(raw_post)
                 saved = get_init_if_needs(item)
@@ -473,7 +477,7 @@ class TikTok:
                 break
         # However, in case there are a few that are not, we still account for them
         should_stop = False
-        async for block in self.fetch_favorite_web():
+        async for block in self.fetch_favorite_web(limit):
             for raw_post in block:
                 item = await self.parse_item_web(raw_post)
                 saved = get_init_if_needs(item)

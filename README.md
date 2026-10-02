@@ -37,6 +37,12 @@ The example is...
 
 You're all set!
 
+# Troubleshooting
+Run `check_last` command to fetch 100 latest likes/favorites without posting them to Telegram:
+```
+uv run check_last
+```
+
 # TODO
 - [x] tiktok fetching
     - [x] fetch liked videos
@@ -74,10 +80,6 @@ Next runs will check what was already posted and should be faster.
 ### Fetched TikTok list is empty
 If TikTok is blocked in your country, its APIs will work as before, just not returning any data.
 Try a VPN. There wouldn't be a way to circumvent this in this library, but a sanity check should be added.
-
-### Mess in `tiktok.py`
-I don't really like it too. However, that's the only way to keep `.env` loading organized and still inject
-device ID for the whole thing to work.
 
 ### Disappearing post in Telegram channel
 That's the way of determining latest post ID, by sending a new one and immediately deleting it.
