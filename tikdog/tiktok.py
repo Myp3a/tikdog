@@ -5,7 +5,10 @@ import json
 import logging
 import os
 import re
-from typing import Any, AsyncGenerator, Literal
+import time
+from collections.abc import AsyncGenerator
+from datetime import datetime
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import httpx
@@ -32,6 +35,12 @@ class TikTok:
         self.storage = storage
         self.mobile_url = mobile_url
         self.username = username
+        cookies = browser_cookie.split("; ")
+        self.base_cookies = {}
+        for raw_cookie in cookies:
+            cookie_key, cookie_value = raw_cookie.split("=", 1)
+            self.base_cookies[cookie_key] = cookie_value
+        self.learned_cookies = {}
         self.browser_params = {
             "aid": "1988",
             "app_language": "en",
@@ -57,7 +66,6 @@ class TikTok:
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/136.0.0.0 Safari/537.36"
             ),
-            "Cookie": browser_cookie,
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
             "sec-ch-ua": '"Chromium";v="136", "Google Chrome";v="136"',
@@ -81,22 +89,62 @@ class TikTok:
         self.sec_uid = ""
         self.fetch_block_size = 20
         self.posts: dict[int, ParsedTikTokPost] = {}
-        self.request_delay_sec = 5
-        self.retry_count = 3
+        self.request_delay_sec = 3
+        self.retry_count = 6  # block + challenge + request
 
     async def web_request(
-        self, method: Literal["GET", "POST"], url: str, headers: dict[str, str] | None = None
+        self,
+        method: Literal["GET", "POST"],
+        url: str,
+        headers: dict[str, str] | None = None,
+        timeout: int = 10,
     ) -> httpx.Response:
         if headers is None:
             headers = {}
-        async with httpx.AsyncClient(follow_redirects=True) as cli:
-            req_headers = {**self.browser_headers, **headers}
+        async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(timeout)) as cli:
+            req_base_headers = self.browser_headers | headers
+            waf_solution = {}
             for _ in range(self.retry_count):
+                for cookie_key in list(self.learned_cookies.keys()):
+                    if 0 < self.learned_cookies.get(cookie_key, ("", 0))[1] <= time.time():
+                        self.learned_cookies.pop(cookie_key)
+                req_headers = req_base_headers | {
+                    "Cookie": "; ".join(
+                        [
+                            f"{k}={v}"
+                            for k, v in (
+                                self.base_cookies | {k: v[0] for k, v in self.learned_cookies.items()} | waf_solution
+                            ).items()
+                        ]
+                    )
+                }
                 try:
                     resp = await cli.request(method, url, headers=req_headers)
-                except (httpx.ReadTimeout, httpx.ConnectTimeout):
+                except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TransportError):
                     await asyncio.sleep(self.request_delay_sec)
                 else:
+                    for redir in (*resp.history, resp):
+                        if redir.url.host != "www.tiktok.com":
+                            continue
+                        for set_cookie in redir.headers.get_list("set-cookie"):
+                            blocks = set_cookie.split(";")
+                            name, value = blocks[0].strip().split("=", 1)
+                            expires_at = 0
+                            for block in blocks[1:]:
+                                attr, _, val = block.strip().partition("=")
+                                try:
+                                    if attr.lower() == "max-age":
+                                        expires_at = time.time() + int(val)
+                                    elif attr.lower() == "expires":
+                                        expires_at = (
+                                            datetime.strptime(val, "%a, %d %b %Y %H:%M:%S %Z").astimezone().timestamp()
+                                        )
+                                except (TypeError, ValueError):
+                                    pass
+                            if not value or (0 < expires_at <= time.time()):
+                                self.learned_cookies.pop(name, None)
+                            else:
+                                self.learned_cookies[name] = (value, expires_at)
                     if (
                         resp.status_code == 200
                         and "text/html" in resp.headers.get("Content-Type", "")
@@ -135,27 +183,27 @@ class TikTok:
 
                         c["d"] = base64.b64encode(str(solution).encode()).decode()
                         cookie_value = base64.b64encode(json.dumps(c, separators=(",", ":")).encode()).decode()
-                        waf_cookie = f"{cookie_name}={cookie_value}"
+                        waf_solution[cookie_name] = cookie_value
                         if rci and rs:
-                            waf_cookie += f"; {rci}={rs}"
-
-                        existing_cookies = req_headers.get("Cookie", "")
-                        retry_cookies = f"{existing_cookies}; {waf_cookie}" if existing_cookies else waf_cookie
-                        retry_headers = {**req_headers, "Cookie": retry_cookies}
-
-                        try:
-                            resp2 = await cli.request(method, url, headers=retry_headers)
-                        except (httpx.ReadTimeout, httpx.ConnectTimeout):
-                            await asyncio.sleep(self.request_delay_sec)
-                            continue
-                        else:
-                            return resp2
+                            waf_solution[rci] = rs
+                    elif (
+                        resp.status_code == 403
+                        and not resp.content
+                        and (resp.request.url.host == "tiktok.com" or resp.request.url.host.endswith(".tiktok.com"))
+                    ):
+                        self.log.info("WAF blocked, dropping cookies")
+                        self.learned_cookies = {}
+                        waf_solution = {}
                     else:
                         return resp
             raise RuntimeError(f"Request failed after {self.retry_count} retries")
 
     async def mobile_request(
-        self, path: str, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: int = 30,
     ) -> httpx.Response:
         if params is None:
             params = self.mobile_params
@@ -165,7 +213,7 @@ class TikTok:
             headers = self.mobile_headers
         else:
             headers = self.mobile_headers | headers
-        async with httpx.AsyncClient(follow_redirects=True) as cli:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(timeout)) as cli:
             for _ in range(self.retry_count):
                 try:
                     resp = await cli.request(
@@ -175,9 +223,13 @@ class TikTok:
                         headers=headers,
                         cookies=self.mobile_cookies,
                     )
-                except (httpx.ReadTimeout, httpx.ConnectTimeout):
+                except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TransportError):
                     await asyncio.sleep(self.request_delay_sec)
                 else:
+                    if resp.headers.get("tlb-backup", "0") == "1":
+                        self.log.warning("Mobile feed unavailable, retrying")
+                        await asyncio.sleep(self.request_delay_sec)
+                        continue
                     return resp
             raise RuntimeError(f"Request failed after {self.retry_count} retries")
 
@@ -209,7 +261,6 @@ class TikTok:
         await self.connect_mobile()
 
     async def fetch_post_metadata_web(self, video_id: int) -> ParsedTikTokPost:
-        # Shouldn't be used.
         # Sometimes blocked server-side, not returning video data. Not ratelimited - plain retry help, but not always.
         post_resp = await self.web_request("GET", f"https://www.tiktok.com/@user/video/{video_id}")
         post_resp.raise_for_status()
@@ -230,7 +281,6 @@ class TikTok:
         return post
 
     async def fetch_post_metadata_mobile(self, video_id: int) -> ParsedTikTokPost:
-        # TODO: might need to rotate mobile URLs
         post_resp = await self.mobile_request("/aweme/v1/feed/", {"aweme_id": video_id}, headers={"x-argus": "why."})
         try:
             post_resp.raise_for_status()
@@ -239,6 +289,7 @@ class TikTok:
         js = post_resp.json()
         target_post = next((v for v in js["aweme_list"] if int(v["aweme_id"]) == video_id), None)
         if not target_post:
+            # If feed fails, tlb-backup is returned - it doesn't have the expected post
             self.log.error(f"Failed to fetch post {video_id} data. Raw data below.")
             self.log.error(json.dumps(js))
             raise RuntimeError("Failed to fetch post data!")
@@ -249,13 +300,13 @@ class TikTok:
         FISCH_ID = 7455398333754952967
         self.log.info("Trying to download test video to check device ID correctness")
         try:
-            vid = await self.fetch_post_metadata_mobile(FISCH_ID)
+            vid = await self.fetch_post_metadata_web(FISCH_ID)
             await self.download_post(vid)
             self.log.info("Test video download fine")
             self.delete_items(vid)
             return True
         except RuntimeError:
-            self.log.error("Can't download test video. Probably, your device ID is invalid.")
+            self.log.exception("Can't download test video. Probably, your device ID is invalid.")
             return False
 
     async def check_copyrighted_video_download(self) -> bool:
@@ -277,7 +328,7 @@ class TikTok:
         PHOTO_ID = 7667189357815532808
         self.log.info("Trying to download photo post")
         try:
-            post = await self.fetch_post_metadata_mobile(PHOTO_ID)
+            post = await self.fetch_post_metadata_web(PHOTO_ID)
             await self.download_post(post)
             self.log.info("Test photo post download fine")
             self.delete_items(post)
@@ -286,7 +337,7 @@ class TikTok:
             self.log.warning("Can't download photo post.", exc_info=True)
             return False
 
-    async def download_post(self, post: ParsedTikTokPost) -> None:
+    async def download_post(self, post: ParsedTikTokPost) -> bool:
         def validate(resp: httpx.Response) -> bool:
             if resp.status_code != 200:
                 return False
@@ -296,10 +347,30 @@ class TikTok:
                 return False
             return True
 
-        # Metadata fetch is costly - defer until actual download
-        post = await self.fetch_post_metadata_mobile(post.id_)
+        # Refresh media URLs
+        refreshed_post: ParsedTikTokPost | None = None
+        retries = 3  # The requests retries themselves until successful answer; the answer could have missing data
+        for _ in range(retries):
+            try:
+                refreshed_post = await self.fetch_post_metadata_web(post.id_)
+                break
+            except RuntimeError:
+                await asyncio.sleep(self.request_delay_sec)
+            except httpx.HTTPStatusError as e:
+                if "403 Forbidden" in e.args[0]:
+                    break
+                raise
+        if not refreshed_post:
+            self.log.warning("Web path failed, retrying with slow mobile")
+            for _ in range(retries):
+                try:
+                    refreshed_post = await self.fetch_post_metadata_mobile(post.id_)
+                except RuntimeError:
+                    pass
+        if not refreshed_post:
+            raise RuntimeError(f"Failed to refresh metadata for post {post.id_}")
         data_dir = "tmp"
-        for item in post.media:
+        for item in refreshed_post.media:
             self.log.debug(f"downloading {item.type_} {item.filename}")
             if not os.path.exists(f"{data_dir}/{item.filename}"):
                 if isinstance(item.download_url, str):
@@ -307,9 +378,12 @@ class TikTok:
                 elif isinstance(item.download_url, list):
                     download_url = item.download_url[0]
                 else:
-                    self.log.error(f"Raw post data: {post}")
+                    self.log.error(f"Raw post data: {refreshed_post}")
                     raise RuntimeError(f"Unsupported download url type: {type(item.download_url)}")
-                resp = await self.web_request("GET", download_url)
+                resp = await self.web_request("GET", download_url, timeout=60)
+                if resp.status_code == 403:
+                    self.log.warning(f"Failed to download {item.type_} {item.post_id}: 403 Forbidden")
+                    return False
                 if not validate(resp):
                     raise RuntimeError(f"Failed to download {item.type_} {item.post_id}")
                 with open(f"{data_dir}/{item.filename}", "wb") as outf:
@@ -331,6 +405,7 @@ class TikTok:
                     cover = httpx.get(item.media_cover_url).content
                     music_file.tags["APIC"] = APIC(encoding=3, mime="image/jpg", type=3, data=cover)
                     music_file.save()
+        return True
 
     def delete_items(self, post: ParsedTikTokPost) -> None:
         data_dir = "tmp"
@@ -339,14 +414,43 @@ class TikTok:
                 os.remove(f"{data_dir}/{item.filename}")
 
     async def parse_item_web(self, item: dict[str, Any]) -> ParsedTikTokPost:
-        # Web API has no content URLs in it, so it requires a refetch via mobile
         try:
             new_item = {
                 "id_": int(item["id"]),
                 "type_": "photo" if "imagePost" in item else "video",
             }
             new_item["web_url"] = f"https://www.tiktok.com/@uSeRnAmE/{new_item['type_']}/{new_item['id_']}"
-            new_item["media"] = []
+            if new_item["type_"] == "photo":
+                new_item["media"] = [
+                    DownloadTask(
+                        post_id=new_item["id_"],
+                        type_="photo",
+                        number=num,
+                        download_url=img["imageURL"]["urlList"][0],
+                    )
+                    for num, img in enumerate(item["imagePost"]["images"])
+                ]
+                if "playUrl" in item["music"]:
+                    new_item["media"].append(
+                        DownloadTask(
+                            post_id=new_item["id_"],
+                            type_="music",
+                            number=len(new_item["media"]),
+                            download_url=item["music"]["playUrl"],
+                            media_name=item["music"]["title"],
+                            media_cover_url=item["music"]["coverLarge"],
+                            media_format="mp3" if "mp3" in item["music"]["playUrl"] else "m4a",
+                        )
+                    )
+            else:
+                new_item["media"] = [
+                    DownloadTask(
+                        post_id=new_item["id_"],
+                        type_="video",
+                        number=0,
+                        download_url=item["video"]["playAddr"],
+                    )
+                ]
             post = ParsedTikTokPost(**new_item)
         except:
             self.log.error("Failed to parse TikTok post. Raw data below, bailing out.")
