@@ -414,12 +414,12 @@ class TikTok:
                 os.remove(f"{data_dir}/{item.filename}")
 
     async def parse_item_web(self, item: dict[str, Any]) -> ParsedTikTokPost:
+        new_item = {
+            "id_": int(item["id"]),
+            "type_": "photo" if "imagePost" in item else "video",
+        }
+        new_item["web_url"] = f"https://www.tiktok.com/@uSeRnAmE/{new_item['type_']}/{new_item['id_']}"
         try:
-            new_item = {
-                "id_": int(item["id"]),
-                "type_": "photo" if "imagePost" in item else "video",
-            }
-            new_item["web_url"] = f"https://www.tiktok.com/@uSeRnAmE/{new_item['type_']}/{new_item['id_']}"
             if new_item["type_"] == "photo":
                 new_item["media"] = [
                     DownloadTask(
@@ -452,19 +452,19 @@ class TikTok:
                     )
                 ]
             post = ParsedTikTokPost(**new_item)
-        except:
-            self.log.error("Failed to parse TikTok post. Raw data below, bailing out.")
+        except KeyError:
+            self.log.error("Failed to parse TikTok post. Raw data below, returning header only.")
             self.log.error(json.dumps(item))
-            raise
+            post = ParsedTikTokPost(**new_item, media=[])
         return post
 
     async def parse_item_mobile(self, item: dict[str, Any]) -> ParsedTikTokPost:
+        new_item = {
+            "id_": int(item["aweme_id"]),
+            "type_": "photo" if "image_post_info" in item else "video",
+        }
+        new_item["web_url"] = f"https://www.tiktok.com/@uSeRnAmE/{new_item['type_']}/{new_item['id_']}"
         try:
-            new_item = {
-                "id_": int(item["aweme_id"]),
-                "type_": "photo" if "image_post_info" in item else "video",
-            }
-            new_item["web_url"] = f"https://www.tiktok.com/@uSeRnAmE/{new_item['type_']}/{new_item['id_']}"
             if new_item["type_"] == "photo":
                 new_item["media"] = [
                     DownloadTask(
@@ -499,10 +499,10 @@ class TikTok:
                     )
                 ]
             post = ParsedTikTokPost(**new_item)
-        except:
-            self.log.error("Failed to parse mobile TikTok post. Raw data below, bailing out.")
+        except KeyError:
+            self.log.error("Failed to parse mobile TikTok post. Raw data below, returning header only.")
             self.log.error(json.dumps(item))
-            raise
+            post = ParsedTikTokPost(**new_item, media=[])
         return post
 
     async def fetch_liked_web(self, limit: int = 0) -> AsyncGenerator[list[dict[str, Any]], None]:
@@ -560,6 +560,15 @@ class TikTok:
                 return in_posts
             raise KeyError("item should be initialized, but somehow it's not")
 
+        async def try_refetch(item: ParsedTikTokPost) -> ParsedTikTokPost:
+            web_item = await self.fetch_post_metadata_web(item.id_)
+            if web_item.media:
+                return web_item
+            mobile_item = await self.fetch_post_metadata_mobile(item.id_)
+            if mobile_item.media:
+                return mobile_item
+            return item
+
         self.log.info("Fetching new posts")
         # As the order of posts is the newest -> oldest, we can't just append to the main dict
         new_posts: dict[int, ParsedTikTokPost] = {}
@@ -568,6 +577,9 @@ class TikTok:
         async for block in self.fetch_liked_web(limit):
             for raw_post in block:
                 item = await self.parse_item_web(raw_post)
+                if not item.media:
+                    # Even if failed, it will be refetched on download. Retry just to keep proper metadata
+                    item = await try_refetch(item)
                 saved = get_init_if_needs(item)
                 if saved.liked:
                     # Already fetched by this function.
@@ -584,6 +596,8 @@ class TikTok:
         async for block in self.fetch_favorite_web(limit):
             for raw_post in block:
                 item = await self.parse_item_web(raw_post)
+                if not item.media:
+                    item = await try_refetch(item)
                 saved = get_init_if_needs(item)
                 if saved.favorited:
                     self.log.info(f"stopping at {saved.id_} as it's already fetched")
