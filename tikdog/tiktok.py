@@ -328,7 +328,9 @@ class TikTok:
         PHOTO_ID = 7667189357815532808
         self.log.info("Trying to download photo post")
         try:
-            post = await self.fetch_post_metadata_web(PHOTO_ID)
+            # Web API - no photo posts at all
+            # Mobile - some are missing
+            post = await self.fetch_post_metadata_mobile(PHOTO_ID)
             await self.download_post(post)
             self.log.info("Test photo post download fine")
             self.delete_items(post)
@@ -347,28 +349,33 @@ class TikTok:
                 return False
             return True
 
-        # Refresh media URLs
+        # Video posts need metadata refresh - URLs in liked response 403 immediately.
+        # Photo posts no longer availalble on web API - though, liked response carries valid URLs, so no refresh.
         refreshed_post: ParsedTikTokPost | None = None
         retries = 3  # The requests retries themselves until successful answer; the answer could have missing data
-        for _ in range(retries):
-            try:
-                refreshed_post = await self.fetch_post_metadata_web(post.id_)
-                break
-            except RuntimeError:
-                await asyncio.sleep(self.request_delay_sec)
-            except httpx.HTTPStatusError as e:
-                if "403 Forbidden" in e.args[0]:
-                    break
-                raise
-        if not refreshed_post:
-            self.log.warning("Web path failed, retrying with slow mobile")
+        if post.type_ == "video":
             for _ in range(retries):
                 try:
-                    refreshed_post = await self.fetch_post_metadata_mobile(post.id_)
+                    refreshed_post = await self.fetch_post_metadata_web(post.id_)
+                    break
                 except RuntimeError:
-                    pass
-        if not refreshed_post:
-            raise RuntimeError(f"Failed to refresh metadata for post {post.id_}")
+                    await asyncio.sleep(self.request_delay_sec)
+                except httpx.HTTPStatusError as e:
+                    if "403 Forbidden" in e.args[0]:
+                        break
+                    raise
+            if not refreshed_post:
+                self.log.warning("Web path failed, retrying with slow mobile")
+                for _ in range(retries):
+                    try:
+                        refreshed_post = await self.fetch_post_metadata_mobile(post.id_)
+                    except RuntimeError:
+                        pass
+            if not refreshed_post:
+                raise RuntimeError(f"Failed to refresh metadata for post {post.id_}")
+        else:
+            refreshed_post = post
+
         data_dir = "tmp"
         for item in refreshed_post.media:
             self.log.debug(f"downloading {item.type_} {item.filename}")
