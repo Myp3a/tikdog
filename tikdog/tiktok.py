@@ -446,7 +446,9 @@ class TikTok:
                             download_url=item["music"]["playUrl"],
                             media_name=item["music"]["title"],
                             media_cover_url=item["music"]["coverLarge"],
-                            media_format="mp3" if "mp3" in item["music"]["playUrl"] else "m4a",
+                            media_format="mp3"
+                            if any(w in item["music"]["playUrl"] for w in ["mp3", "audio_mpeg"])
+                            else "m4a",
                         )
                     )
             else:
