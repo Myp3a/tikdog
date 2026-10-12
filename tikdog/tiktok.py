@@ -33,7 +33,8 @@ class TikTok:
     ):
         self.log = logging.getLogger("tikdog.tiktok")
         self.storage = storage
-        self.mobile_url = mobile_url
+        self.mobile_urls = mobile_url.split(",")
+        self.mobile_url_selector = 0
         self.username = username
         cookies = browser_cookie.split("; ")
         self.base_cookies = {}
@@ -218,7 +219,7 @@ class TikTok:
                 try:
                     resp = await cli.request(
                         "GET",
-                        f"https://{self.mobile_url}{path}",
+                        f"https://{self.mobile_urls[self.mobile_url_selector]}{path}",
                         params=params,
                         headers=headers,
                         cookies=self.mobile_cookies,
@@ -226,6 +227,14 @@ class TikTok:
                 except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TransportError):
                     await asyncio.sleep(self.request_delay_sec)
                 else:
+                    # API URL no longer working
+                    if resp.status_code >= 500:
+                        self.log.warning(
+                            f"Mobile URL {self.mobile_urls[self.mobile_url_selector]} is dead, rotating to the next one"
+                        )
+                        self.mobile_url_selector = (self.mobile_url_selector + 1) % len(self.mobile_urls)
+                        self.log.warning(f"New mobile URL: {self.mobile_urls[self.mobile_url_selector]}")
+                        continue
                     if resp.headers.get("tlb-backup", "0") == "1":
                         self.log.warning("Mobile feed unavailable, retrying")
                         await asyncio.sleep(self.request_delay_sec)
